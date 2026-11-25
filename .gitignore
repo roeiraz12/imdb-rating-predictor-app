@@ -2,7 +2,5 @@ __pycache__/
 venv/
 .venv/
 
-# Local run setup (see readme)
-trained_model.pkl
-templates/
+# IMDb raw data (only needed for training, not for the app)
 *.tsv.gz

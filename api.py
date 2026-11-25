@@ -6,10 +6,15 @@ import os
 import re
 from assets_data_prep import prepare_data
 
-app = Flask(__name__, template_folder=os.path.abspath('templates'))
+# Paths are relative to this file, so the app runs from any working directory.
+# index.html and model.pkl live next to api.py in the repository.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, 'model.pkl')
+
+app = Flask(__name__, template_folder=BASE_DIR)
 
 try:
-    model = joblib.load('trained_model.pkl')
+    model = joblib.load(MODEL_PATH)
     print("--- Model loaded successfully! ---")
 except Exception as e:
     print(f"Error loading model: {e}")
@@ -32,6 +37,14 @@ def predict():
             if field not in data or data[field] == "":
                 return jsonify({'error': f'Missing required field: {field}'}), 400 
 
+        if model is None:
+            return jsonify({'error': 'Model is not loaded on the server'}), 500
+
+        try:
+            int(data['startYear']); int(data['runtimeMinutes']); float(data['budget'])
+        except (TypeError, ValueError):
+            return jsonify({'error': 'שנה, אורך ותקציב חייבים להיות מספרים'}), 400
+
         if not (1900 <= int(data['startYear']) <= 2026):
             return jsonify({'error': 'שנת יציאה חייבת להיות בין 1900 ל-2026'}), 400
         if not (1 <= int(data['runtimeMinutes']) <= 300):
@@ -43,10 +56,19 @@ def predict():
         if not is_english_only(data['Language']) or not is_english_only(data['Country']):
             return jsonify({'error': 'שדה שפה ומדינה חייבים להכיל אנגלית בלבד'}), 400
 
+        # קלט רשימה: JSON (["nm0000138","nm0000001"]) או טקסט מופרד בפסיקים (nm0000138, nm0000001)
+        def to_list(val):
+            if isinstance(val, list):
+                return val
+            val = str(val).strip()
+            if val.startswith('['):
+                return json.loads(val)
+            return [item.strip() for item in val.split(',') if item.strip()]
+
         # פונקציית אימות משופרת: פורמט + אורך + כפילויות
         def validate_list_format(val_str, field_name, max_items, check_mn=False):
             try:
-                items = json.loads(val_str)
+                items = to_list(val_str)
                 if not isinstance(items, list): return False, "חייב להיות רשימה"
                 if len(items) > max_items: return False, f"ניתן להזין לכל היותר {max_items} ערכים"
                 
@@ -55,9 +77,11 @@ def predict():
                     return False, f"קיימים ערכים כפולים בשדה {field_name}"
                 
                 for item in items:
-                    if check_mn and not re.match(r'^mn\d{7}$', str(item)):
-                        return False, f"ערך '{item}' אינו תקין (נדרש mn + 7 ספרות)"
-                    if not check_mn and not is_english_only(item):
+                    # IMDb person IDs: "nm" + 7 or 8 digits (e.g. nm0000138)
+                    if check_mn and not re.match(r'^nm\d{7,8}$', str(item)):
+                        return False, f"ערך '{item}' אינו תקין (נדרש מזהה IMDb: nm + 7-8 ספרות)"
+                    # genres: English letters, spaces and hyphens (IMDb has "Sci-Fi", "Film-Noir")
+                    if not check_mn and not re.match(r'^[a-zA-Z\s-]+$', str(item)):
                         return False, f"ערך '{item}' אינו תקין (נדרש אנגלית)"
                 return True, ""
             except: return False, "פורמט JSON לא תקין"
@@ -78,7 +102,7 @@ def predict():
         }
 
         def parse_list_field(field_input, max_items):
-            items = json.loads(field_input)
+            items = to_list(field_input)
             return [items[i] if i < len(items) else "" for i in range(max_items)]
 
         for i, act in enumerate(parse_list_field(data['actor_1'], 5), 1): parsed_data[f'actor_{i}'] = act
